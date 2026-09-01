@@ -12,8 +12,8 @@
   python fetch_sellfox_daily_ad_reports.py --shop-ids 128154,128155 --start 2026-08-01 --end 2026-08-12
 
 默认输出（原表与筛选结果分别保留在根目录下的两个子文件夹）：
-  <桌面>/赛狐广告报表明细/赛狐原表数据/           原表（7 个下载文件，固定文件名，最新一次拉取覆盖旧文件）
-  <桌面>/赛狐广告报表明细/赛狐原表筛选结果文件夹/  筛选结果表（7 个：5 种按运行状态筛选 + 搜索词/购买商品按活动ID关联筛选）
+  <桌面>/赛狐广告报表明细/赛狐原表数据/           原表（6 个下载文件，固定文件名，最新一次拉取覆盖旧文件）
+  <桌面>/赛狐广告报表明细/赛狐原表筛选结果文件夹/  筛选结果表（6 个：4 种按运行状态筛选 + 搜索词/购买商品按活动ID关联筛选）
 
 说明：
   - client_id / client_secret 默认内置，可通过环境变量 SF_CLIENT_ID / SF_CLIENT_SECRET 覆盖
@@ -52,7 +52,7 @@ GRANT_TYPE = "client_credentials"
 DEFAULT_CLIENT_ID = "368900"
 DEFAULT_CLIENT_SECRET = "9eaec859-fb6a-4709-a98d-7432bcb93c02"
 
-# 7 种报告类型 → 中文名（用于文件命名）
+# 6 种报告类型 → 中文名（用于文件命名）
 REPORT_TYPES = [
     "adCampaignReport",
     "adGroupReport",
@@ -60,7 +60,6 @@ REPORT_TYPES = [
     "adSpaceReport",
     "adSearchTermReport",
     "adPurchasedItemReport",
-    "adTargeringReport",
 ]
 REPORT_NAMES = {
     "adCampaignReport": "广告活动报告",
@@ -69,7 +68,6 @@ REPORT_NAMES = {
     "adSpaceReport": "广告位报告",
     "adSearchTermReport": "搜索词报告",
     "adPurchasedItemReport": "广告购买商品报告",
-    "adTargeringReport": "投放报告",
 }
 
 BASE_OUTPUT_DIR = Path.home() / "Desktop" / "赛狐广告报表明细"                # 根目录
@@ -432,7 +430,6 @@ FILTER_RULES = {
     "adGroupReport": ("广告组运行状态", "已开启"),
     "adProductReport": ("广告产品运行状态", "已开启"),
     "adSpaceReport": ("广告活动运行状态", "已开启"),
-    "adTargeringReport": ("投放运行状态", "已开启"),
     # adSearchTermReport / adPurchasedItemReport: 无"运行状态"列，改按活动ID关联筛选（见 JOIN_FILTER_RULES）
 }
 
@@ -872,7 +869,7 @@ def fetch_portfolios(shop_ids, out_dir):
             print(f"✗ 广告组合[{shop_id}] 导出失败: {e}", file=sys.stderr)
             return None
 
-        out_file = out_dir / f"广告组合_{shop_id}.csv"
+        out_file = out_dir / "广告组合信息查询表.csv"
         if out_file.exists():
             print(f"  提示: 文件已存在，覆盖写入 → {out_file.name}")
         # UTF-8 BOM：Excel 双击打开中文不乱码；ID 列为文本字符串，无科学计数法风险
@@ -888,7 +885,7 @@ def fetch_portfolios(shop_ids, out_dir):
 # ── 入口 ────────────────────────────────────────────────────────────
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="赛狐 SP 广告天维度(daily)报告下载（7 种报告；原表与筛选结果分别保存）"
+        description="赛狐 SP 广告天维度(daily)报告下载（6 种报告；原表与筛选结果分别保存）"
     )
     parser.add_argument("--shop-ids", required=True,
                         help="店铺ID，多个用逗号分隔，如 128154,128155")
@@ -899,7 +896,7 @@ def parse_args(argv):
     parser.add_argument("--filtered-out", default=str(DEFAULT_FILTERED_DIR),
                         help=f"筛选结果目录（默认 {DEFAULT_FILTERED_DIR}）")
     parser.add_argument("--report-types", default=",".join(REPORT_TYPES),
-                        help="报告类型，逗号分隔（默认全部 7 种）")
+                        help="报告类型，逗号分隔（默认全部 6 种）")
     parser.add_argument("--interval", type=float, default=TASK_INTERVAL,
                         help=f"创建任务间隔秒（默认 {TASK_INTERVAL}）")
     parser.add_argument("--poll-interval", type=float, default=POLL_INTERVAL,

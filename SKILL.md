@@ -18,8 +18,8 @@ description: 赛狐ERP广告数据明细下载与聚合技能。下载赛狐SP�
 - Python 3（仅标准库，零第三方依赖）；Windows 下运行需设 `PYTHONUTF8=1`
 - 凭证：client_id / client_secret 内置于抓取脚本，可用环境变量 `SF_CLIENT_ID` / `SF_CLIENT_SECRET` 覆盖
 - 目录结构（桌面 `赛狐广告报表明细\`）：
-  - `赛狐原表数据\` — API 下载的原表 xlsx（固定文件名，最新一次拉取覆盖旧文件）+ 组合CSV + 店铺列表
-  - `赛狐原表筛选结果文件夹\` — 筛选后的表（7 个：5 种按运行状态筛选 + 搜索词/购买商品按活动ID关联筛选；固定文件名）
+  - `赛狐原表数据\` — API 下载的原表 xlsx（固定文件名，最新一次拉取覆盖旧文件）+ 组合CSV + 店铺列表 + 在线产品明细
+  - `赛狐原表筛选结果文件夹\` — 筛选后的表（6 个：4 种按运行状态筛选 + 搜索词/购买商品按活动ID关联筛选；固定文件名）
   - `广告分析聚合表\` — 聚合输出 CSV（固定文件名，覆盖写）
 
 ## 工作流程
@@ -27,7 +27,7 @@ description: 赛狐ERP广告数据明细下载与聚合技能。下载赛狐SP�
 1. **执行前必确认参数（不得在指令中写死）**：运行 `fetch_sellfox_daily_ad_reports.py` 前必须与用户确认两项：
    - **日期范围**：按指定日期格式 `YYYY-MM-DD~YYYY-MM-DD`（`--start` / `--end`）询问用户本次要拉取的区间，不得默认沿用上一次或硬编码
    - **店铺ID**：向用户询问本次要拉取的店铺ID；**用户无法提供时**，先按需运行 `fetch_sellfox_shop_list.py`（见脚本模块表），给用户 `店铺列表.csv` 查看链接,辅助用户确认目标店铺ID
-2. **下载原表**：参数确认后运行抓取脚本，token 本地缓存 24h 复用，任务轮询完成后 xlsx 自动落入原表数据文件夹
+2. **下载原表**：参数确认后运行抓取脚本，token 本地缓存 24h 复用，任务轮询完成后 xlsx 自动落入原表数据文件夹；同批店铺ID 还需运行 `fetch_sellfox_online_products.py`（见脚本模块表）导出 在线产品明细.csv —— 购买商品聚合做其他ASIN→SKU(sku)映射的依赖，产品上架/下架变动后应重跑
 3. **运行聚合**：执行 `aggregate_all.py`，一次性按依赖顺序跑完 5 个聚合脚本（组合→活动→广告位→搜索词→购买商品，购买商品自动最后跑）；各脚本自动挑选输入目录固定名文件，无需传路径
 4. **运行聚合并验收**：`aggregate_all.py` 退出码非 0 即失败（失败即停并报告是哪一步），读报错定位，绝不静默跳过或手工删数据
 5. **同步说明文档**：生成结果文件后，将 `references/结果文件说明.md` 复制覆盖到 `桌面\赛狐广告报表明细\结果文件说明.md`（一级目录，供非技能场景查阅）
@@ -38,8 +38,9 @@ description: 赛狐ERP广告数据明细下载与聚合技能。下载赛狐SP�
 
 | 脚本 | 用途 | 用法 |
 | --- | --- | --- |
-| `fetch_sellfox_daily_ad_reports.py` | 下载7种SP报告原表+筛选结果+广告组合CSV | `python fetch_sellfox_daily_ad_reports.py --shop-ids <店铺ID> --start <YYYY-MM-DD> --end <YYYY-MM-DD>` |
+| `fetch_sellfox_daily_ad_reports.py` | 下载6种SP报告原表+筛选结果+广告组合CSV | `python fetch_sellfox_daily_ad_reports.py --shop-ids <店铺ID> --start <YYYY-MM-DD> --end <YYYY-MM-DD>` |
 | `fetch_sellfox_shop_list.py` | 拉取已授权启用店铺列表，辅助确认店铺ID | `python fetch_sellfox_shop_list.py` |
+| `fetch_sellfox_online_products.py` | 导出店铺在线产品明细（shopId/asin/sku；剔除sku含amzn行、按asin去重保首次），供购买商品聚合翻译其他ASIN | `python fetch_sellfox_online_products.py --shop-ids <店铺ID>` |
 | `aggregate_all.py` | 按依赖顺序一次跑完 5 个聚合脚本 | `python aggregate_all.py` |
 | `aggregate_campaign_by_portfolio.py` | 组合维度聚合 | （由 aggregate_all.py 调用） |
 | `aggregate_campaign_by_campaign.py` | 活动维度聚合（产出 广告活动聚合.csv） | （由 aggregate_all.py 调用） |

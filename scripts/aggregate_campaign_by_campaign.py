@@ -5,7 +5,8 @@
 流程：
   1. 读取 筛选结果文件夹 下最新一份 广告活动报告_*.xlsx（流式解析，表头行自动定位）
   2. 按 [广告组合ID + 广告活动ID + 定位类型] 分组，按指标列 SUM / AVERAGE 聚合
-  3. 读取 赛狐原表数据 下最新一份 广告组合_*.csv，portfolioId=广告组合ID → name，
+  3. 读取 赛狐原表数据 下 广告组合信息查询表.csv（目录内最新一份 广告组合*.csv，
+     兼容历史命名），portfolioId=广告组合ID → name，
      作为新列 [广告组合名称] 插入在 [广告组合ID] 之后（聚合完成后新增）
   4. 输出 CSV（UTF-8 BOM）到 广告分析聚合表 文件夹
 
@@ -61,8 +62,8 @@ KEY_TARGETING = "定位类型"
 KEY_CAMPAIGN_NAME = "广告活动"
 NAME_COL = "广告组合名称"
 DATE_COL = "日期"               # 周维度分组的日期源列
-MONTH_COL = "月份"              # 周维度表新增列: 周归属月 = 所在周周一的年月（如 2026年8月）
-WEEK_COL = "周维度"             # 周维度表新增列: 连续周序号 w1、w2…（从数据最早一周累加，跨月不重置）
+MONTH_COL = "月份"              # 周维度表新增列: 周归属月 = 该周起始日的年月（如 2026年8月）
+DAYS_COL = "实际天数"           # 周维度表新增列: 该周内实际有数据的天数（组内不同日期数）
 _EPOCH = datetime(1899, 12, 30)  # Excel 序列号起点
 
 # 指标列定义: 列名 -> ("sum"|"avg", 输出类型)
@@ -89,13 +90,15 @@ METRIC_COLS = [
 
 WEEK_NOTES = """
 周维度表 (广告活动聚合_周维度_*.csv) 补充说明:
-  分组键: 广告组合ID + 广告活动ID + 定位类型 + 日期所在周（周一为一周开始，周一~周日）
+  分组键: 广告组合ID + 广告活动ID + 定位类型 + 日期所在周（以数据最晚日期为终点，
+    倒数连续7天为一周；开头剩余天数不足7天时仍计为一周，保证最近一周永远满7天）
   日期列: 显示该组实际出现的最早~最晚日期（yyyy-mm-dd ~ yyyy-mm-dd），
     非整周边界；日期为空的行归入空周组，日期列留空（不删行）
-  月份/周维度列: 月份 = 所在周周一的年月，跨月周归周一所在月，中文格式 2026年8月
-    （避免纯 2026-08 被 Excel 打开时误转成 Jul-26 类日期显示）；
-    周维度 = 从输入数据最早一周起的连续周序号（首周 w1，向下累加 w2、w3…，
-    跨月不重新计数，月份切换由「月份」列区分）；空周组两列留空
+  月份列: 月份 = 该周起始日（锚点 − 7×周序 − 6 天，即桶内最早一天）的年月，
+    中文格式 2026年8月（避免纯 2026-08 被 Excel 打开时误转成 Jul-26 类日期显示）；
+    空周组留空
+  实际天数列: 该周内实际有数据的天数（组内不同日期数），完整周为7，
+    最旧一桶不足7天时为实际剩余天数，周内缺天时如实显示；空周组留空
   指标口径与全量聚合表完全一致（SUM/AVERAGE/ACoS/ROAS 同规则）
 """
 
@@ -237,30 +240,40 @@ def parse_date(text):
     return "BAD"
 
 
-def month_week_label(wk_iso, first_wk):
-    """周键(所在周周一的 yyyy-mm-dd) → (月份, 周维度) 标签；first_wk 为数据最早周键。
+def week_month_label(wk_idx, anchor):
+    """周桶序号(0基，0=最近一周) → 周归属月份标签；anchor 为数据最晚日期。
 
-    规则: 周归属月份 = 周一所在月（跨月周归周一所在月），中文格式 2026年8月
-    （避免被 Excel 误识别为日期）；
-    w序号 = 从数据最早一周起的连续序号（首周 w1，每周 +1，跨月不重新计数）。
-    空串 → ("", "")。
+    规则: 周归属月份 = 该周起始日（anchor − 7×wk_idx − 6 天，即桶内最早一天）所在月，
+    中文格式 2026年8月（避免被 Excel 误识别为日期）。
+    wk_idx < 0（空周组）或无锚点 → ""。
     """
-    if not wk_iso:
-        return "", ""
-    d = datetime.fromisoformat(wk_iso).date()
-    first = datetime.fromisoformat(first_wk).date()
-    return f"{d.year}年{d.month}月", f"w{(d - first).days // 7 + 1}"
+    if wk_idx < 0 or anchor is None:
+        return ""
+    ws = anchor - timedelta(days=7 * wk_idx + 6)
+    return f"{ws.year}年{ws.month}月"
 
 
 def aggregate(data, weekly=False):
     """按 (广告组合ID, 广告活动ID, 定位类型) 分组聚合（weekly=True 时追加
-    "日期所在周"为附加分组键，周一为一周开始）。
+    "日期所在周"为附加分组键，以数据最晚日期为终点倒数连续7天为一周）。
 
     返回结果列表[(portfolio_id, campaign_name, campaign_id, targeting, 日期范围,
     指标dict, 行数)]；日期范围仅周维度有意义（全量模式恒为空串）。
     数据完整性: 所有行全部计入（空键归入空字符串键组），零删行。
     fail-fast 非数值/非日期。
     """
+    # 周桶锚点: 全部数据中最晚日期（连续7天为一周，从最晚日期倒数切分；
+    # 开头剩余天数不足7天时仍计为一周，保证最近一周永远满7天；空日期行不参与）
+    anchor = None
+    if weekly:
+        for r_idx, row in enumerate(data, start=1):
+            d = parse_date(row.get(DATE_COL, ""))
+            if d == "BAD":
+                fail(f"第{r_idx}行列「{DATE_COL}」无法解析日期: "
+                     f"{(row.get(DATE_COL) or '').strip()!r}")
+            if d is not None and (anchor is None or d > anchor):
+                anchor = d
+
     groups = {}   # key -> {"names": set, "sum": {}, "avg_sum": {}, "avg_n": {}, "n": int, ...}
     empty_portfolio_rows = 0
     empty_targeting_rows = 0
@@ -275,7 +288,7 @@ def aggregate(data, weekly=False):
             empty_portfolio_rows += 1
         if not tgt:
             empty_targeting_rows += 1
-        wk = ""
+        wk = -1
         d = None
         if weekly:
             d = parse_date(row.get(DATE_COL, ""))
@@ -285,16 +298,17 @@ def aggregate(data, weekly=False):
             if d is None:
                 empty_date_rows += 1
             else:
-                wk = (d - timedelta(days=d.weekday())).isoformat()  # 所在周周一
+                wk = (anchor - d).days // 7  # 倒数连续7天周桶序号（0基，0=最近一周）
         key = (pid, cid, tgt, wk) if weekly else (pid, cid, tgt)
         g = groups.setdefault(
             key, {"names": set(), "sum": {}, "avg_sum": {}, "avg_n": {},
-                  "dmin": None, "dmax": None, "n": 0})
+                  "dmin": None, "dmax": None, "dates": set(), "n": 0})
         if d is not None:
             if g["dmin"] is None or d < g["dmin"]:
                 g["dmin"] = d
             if g["dmax"] is None or d > g["dmax"]:
                 g["dmax"] = d
+            g["dates"].add(d)
         if cname:
             g["names"].add(cname)
         g["n"] += 1
@@ -322,12 +336,6 @@ def aggregate(data, weekly=False):
     if weekly and empty_date_rows:
         print(f"提示: {empty_date_rows} 行「{DATE_COL}」为空，已归入空周组（不删行）")
 
-    # 周维度连续序号锚点: 全部数据中最早一周的周一（空周组不参与）
-    first_wk = ""
-    if weekly:
-        week_keys = [k[-1] for k in groups if k[-1]]
-        first_wk = min(week_keys) if week_keys else ""
-
     results = []
     for gkey, g in groups.items():
         out = {}
@@ -351,9 +359,10 @@ def aggregate(data, weekly=False):
             pid, cid, tgt, wk = gkey
             drange = "" if g["dmin"] is None else \
                 f"{g['dmin'].isoformat()} ~ {g['dmax'].isoformat()}"
-            mlabel, wlabel = month_week_label(wk, first_wk)
+            mlabel = week_month_label(wk, anchor)
+            ndays = "" if wk < 0 else len(g["dates"])
             results.append((pid, campaign_name, cid, tgt, drange, out, g["n"],
-                            mlabel, wlabel))
+                            mlabel, ndays))
         else:
             pid, cid, tgt = gkey
             results.append((pid, campaign_name, cid, tgt, "", out, g["n"]))
@@ -406,11 +415,11 @@ def main():
     args = parse_args()
 
     in_file = Path(args.input) if args.input else pick_input(DEFAULT_INPUT_DIR, "广告活动报告", ".xlsx")
-    pf_file = Path(args.portfolio) if args.portfolio else latest_file(DEFAULT_PORTFOLIO_DIR, "广告组合_", ".csv")
+    pf_file = Path(args.portfolio) if args.portfolio else latest_file(DEFAULT_PORTFOLIO_DIR, "广告组合", ".csv")
     if in_file is None:
         fail(f"{DEFAULT_INPUT_DIR} 下未找到 广告活动报告.xlsx（或历史 广告活动报告_*.xlsx）")
     if pf_file is None:
-        fail(f"{DEFAULT_PORTFOLIO_DIR} 下未找到 广告组合_*.csv")
+        fail(f"{DEFAULT_PORTFOLIO_DIR} 下未找到 广告组合*.csv")
 
     print("=" * 60)
     print("广告活动维度分组聚合")
@@ -428,7 +437,7 @@ def main():
         fail(f"完整性校验失败: 各组行数合计 {total_group_rows} ≠ 输入行数 {len(data)}")
     print(f"✓ 分组完成: {len(results)} 组（行数合计 {total_group_rows}/{len(data)}，零删行）")
 
-    # 周维度分组（原分组键 + 日期所在周，周一为一周开始）
+    # 周维度分组（原分组键 + 日期所在周，以数据最晚日期为终点倒数连续7天为一周）
     results_w = aggregate(data, weekly=True)
     total_w = sum(t[6] for t in results_w)
     if total_w != len(data):
@@ -457,14 +466,14 @@ def main():
 
     out_file_w = out_dir / "广告活动聚合_周维度.csv"
     header_cols_w = [KEY_PORTFOLIO, NAME_COL, KEY_CAMPAIGN_NAME, KEY_CAMPAIGN_ID,
-                     KEY_TARGETING, DATE_COL, MONTH_COL, WEEK_COL] + \
+                     KEY_TARGETING, DATE_COL, MONTH_COL, DAYS_COL] + \
                     [n for n, _, _ in METRIC_COLS]
     with open(out_file_w, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(header_cols_w)
-        for pid, cname, cid, tgt, drange, metrics, _n, mlabel, wlabel in results_w:
+        for pid, cname, cid, tgt, drange, metrics, _n, mlabel, ndays in results_w:
             w.writerow([pid, names.get(pid, ""), cname, cid, tgt, drange,
-                        mlabel, wlabel] +
+                        mlabel, ndays] +
                        [fmt_num(metrics.get(m), fmt) for m, _, fmt in METRIC_COLS])
 
     print("-" * 60)
